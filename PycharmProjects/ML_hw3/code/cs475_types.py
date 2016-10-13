@@ -222,14 +222,20 @@ class knnPredictor:
         for other_instance in self.instance_list:
             distance = 0
 
-            # get combined key list for the distance formula
-            #keyslist = list(set(instance.feature_vector.keys() + other_instance.feature_vector.keys()))
-            keyslist = other_instance.feature_vector.keys()
-            for key in keyslist:
+            #for all the features available in the instances
+            for key in self.featureList:
+                #if feature is not found in either vector, set equal to 0
                 try:
-                    distance += math.pow(instance.feature_vector.get(key) - other_instance.feature_vector.get(key), 2)
+                    x1 = instance.feature_vector.get(key)
                 except KeyError:
-                    distance += math.pow(other_instance.feature_vector.get(key), 2)
+                    x1 = 0
+
+                try:
+                    x2 = other_instance.feature_vector.get(key)
+                except KeyError:
+                    x2 = 0
+
+                distance += math.pow(x1 - x2, 2)
 
             distance = math.sqrt(distance)
             distance_list.append((distance, other_instance.label.label))
@@ -240,15 +246,23 @@ class knnPredictor:
         label_list = {}
         #now predict label using k nearest neighbors
         for i in range(0, self.k):
-            try:
-                label_list[sorted_list[i][1]] += 1
-            except KeyError:
-                label_list[sorted_list[i][1]] = 1
+            #if distance algorithm, use a distance weight metric
+            if "distance" in self.algorithm:
+                weight = (1 + math.pow(sorted_list[i][0], 2))
+            else:
+                weight = 1
 
+            #update our voting label table
+            try:
+                label_list[sorted_list[i][1]] += weight
+            except KeyError:
+                label_list[sorted_list[i][1]] = weight
+
+
+        #find the best label
         max_count = 0
         maxlabel = 999
 
-        print label_list
         for label in label_list.keys():
             if label_list[label] > max_count:
                 max_count = label_list[label]
@@ -257,12 +271,18 @@ class knnPredictor:
                 if label < maxlabel:
                     maxlabel = label
 
-        print maxlabel
         return maxlabel
 
 
     def train(self, instances, algorithm):
         self.instance_list = instances
+        self.algorithm = algorithm
+        #get a list of all the feature numbers available
+        self.featureList = []
+        for instance in instances:
+            for key in instance.feature_vector.keys():
+                if key not in self.featureList:
+                    self.featureList.append(key)
 
 class BoostPredictor:
     def __init__(self, iterations):
@@ -285,24 +305,17 @@ class BoostPredictor:
             else:
                 label = hypothesis_t["above_label"]
 
-            print label
-            print "j, c, below, above:", hypothesis_t["j"], hypothesis_t["cutoff"], hypothesis_t["below_label"], \
-            hypothesis_t["above_label"]
-
             try:
                 label_list[label] += self.a[t]
             except KeyError:
                 label_list[label] = self.a[t]
 
-        print "label list", label_list
         max_count = 0
         for label in label_list.keys():
             if label_list[label] > max_count:
                 max_count = label_list[label]
                 maxlabel = label
 
-        print "final label", maxlabel
-        print "actual label", instance.label.label
         if maxlabel == -1:
             return 0
         else:
@@ -369,25 +382,29 @@ class BoostPredictor:
             #sort the list based on feature magnitude
             sorted_feature = sorted(feature_list[j], key = lambda feature: feature[0])
 
-            print "feature", j
+            below_label_list = {}
+            above_label_list = {}
+
+            # compute dominant label everything above
+            for m in range(0, len(sorted_feature)):
+                try:
+                    above_label_list[sorted_feature[m][1]] += 1
+                except KeyError:
+                    above_label_list[sorted_feature[m][1]] = 1
+
             #try n - 1 number of c cutoffs
             for c in range(1, len(sorted_feature)):
-                below_label_list = {}
-                #compute dominant label everything below
-                for m in range(0, c):
-                    try:
-                        below_label_list[sorted_feature[m][1]] += 1
-                    except KeyError:
-                        below_label_list[sorted_feature[m][1]] = 1
-                belowlabel = frequentLabel(below_label_list)
 
-                #compute dominant label everything above
-                above_label_list = {}
-                for m in range(c, len(sorted_feature)):
-                    try:
-                        above_label_list[sorted_feature[m][1]] += 1
-                    except KeyError:
-                        above_label_list[sorted_feature[m][1]] = 1
+                #add to the voting for the dominant label below c
+                try:
+                    below_label_list[sorted_feature[c-1][1]] += 1
+                except KeyError:
+                    below_label_list[sorted_feature[c-1][1]] = 1
+
+                #add to the voting for the dominant label above c
+                above_label_list[sorted_feature[c-1][1]] -= 1
+
+                belowlabel = frequentLabel(below_label_list)
                 abovelabel = frequentLabel(above_label_list)
 
                 #each hypothesis is a list of length n (instances)
@@ -401,7 +418,6 @@ class BoostPredictor:
                         hypo.append((abovelabel, sorted_feature[m][2]))
 
                 hypo = sorted(hypo, key = lambda feature: feature[1])
-
                 cutoff = 0.5*(sorted_feature[c][0] + sorted_feature[c-1][0])
 
                 hypotheses.append({"j":j, "cutoff": cutoff, "below_label": belowlabel, "above_label": abovelabel, "h(x)": hypo})
@@ -423,6 +439,10 @@ class BoostPredictor:
 
             #calculate alpha
             if min_err < 0.000001:
+                #special vision case
+                if len(self.opt_hypos) == 0:
+                    self.opt_hypos.append(hypothesis_t)
+                    self.a[t] = 1
                 break
             else:
                 self.a[t] = 0.5*math.log((1 - min_err)/min_err)
@@ -437,8 +457,6 @@ class BoostPredictor:
                 self.distribution[i] = self.distribution[i]*math.exp(-self.a[t]*changeLabel(instances[i].label.label)*ht[i][0])/dist_sum
 
             self.opt_hypos.append(hypothesis_t)
-
-            print min_err
 
 
 
